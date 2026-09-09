@@ -1,0 +1,31 @@
+{
+  "name": "TechTrans K-E-V | Dịch Thuật Kỹ Thuật Hàn - Anh - Việt",
+  "short_name": "TechTrans",
+  "description": "Ứng dụng dịch thuật kỹ thuật công nghiệp chuyên dụng cho sản xuất pin, cơ khí và điện tử",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b0f19",
+  "theme_color": "#0b0f19",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "assets/icons/favicon.svg",
+      "sizes": "48x48 72x72 96x96 128x128 256x256 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
