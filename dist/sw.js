@@ -3,7 +3,7 @@
 // (Tối ưu hóa đặc biệt cho Safari iOS - Chống lỗi Redirection)
 // ==========================================================================
 
-const CACHE_NAME = 'techtrans-kev-v3';
+const CACHE_NAME = 'techtrans-kev-v5';
 const ASSETS_TO_CACHE = [
   './',
   './manifest.json',

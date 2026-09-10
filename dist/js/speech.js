@@ -1,5 +1,6 @@
 // ==========================================================================
 // SPEECH.JS - MODULE NHẬN DIỆN GIỌNG NÓI (STT) & PHÁT ÂM VĂN BẢN (TTS)
+// (Tối ưu hóa đa nền tảng: Hỗ trợ iOS Safari, Android, Web & Hybrid Cloud TTS)
 // ==========================================================================
 
 window.SpeechManager = class SpeechManager {
@@ -9,9 +10,26 @@ window.SpeechManager = class SpeechManager {
     this.currentLang = "vi-VN";
     this.voices = [];
     this.synth = window.speechSynthesis || null;
+    this.currentUtterance = null; // Khắc phục lỗi WebKit Garbage Collection trên Safari iOS
+    this.currentAudio = null;
+    this.audioElement = null;
 
     this.initRecognition();
     this.initVoices();
+    this.initAudioPlayer();
+  }
+
+  initAudioPlayer() {
+    this.audioElement = document.getElementById('ttsAudio');
+    if (!this.audioElement) {
+      this.audioElement = new Audio();
+      this.audioElement.id = 'ttsAudio';
+      this.audioElement.setAttribute('playsinline', '');
+      this.audioElement.setAttribute('preload', 'auto');
+      if (document.body) {
+        document.body.appendChild(this.audioElement);
+      }
+    }
   }
 
   /**
@@ -41,7 +59,9 @@ window.SpeechManager = class SpeechManager {
     if (!this.synth) return;
 
     const loadVoices = () => {
-      this.voices = this.synth.getVoices();
+      try {
+        this.voices = this.synth.getVoices();
+      } catch (e) {}
     };
 
     loadVoices();
@@ -55,7 +75,7 @@ window.SpeechManager = class SpeechManager {
   }
 
   isTTSSupported() {
-    return !!window.speechSynthesis;
+    return true; // Luôn hỗ trợ nhờ Hybrid Cloud Audio + Web Speech API
   }
 
   /**
@@ -136,14 +156,11 @@ window.SpeechManager = class SpeechManager {
   }
 
   /**
-   * Phát âm thanh văn bản (TTS)
+   * Phát âm thanh văn bản (TTS) - Cơ chế Hybrid thông minh:
+   * 1. Thử phát bằng Cloud Neural Audio (chất giọng chuẩn người bản xứ, hoạt động 100% trên iPhone không cần cài gói giọng)
+   * 2. Tự động fallback sang Web Speech Synthesis cục bộ nếu offline hoặc lỗi mạng
    */
   speak({ text, lang = "vi-VN", onStart, onEnd, onError }) {
-    if (!this.synth) {
-      if (onError) onError("Trình duyệt không hỗ trợ phát âm thanh Text-To-Speech.");
-      return;
-    }
-
     this.stopSpeaking();
 
     if (!text || !text.trim()) {
@@ -151,38 +168,160 @@ window.SpeechManager = class SpeechManager {
       return;
     }
 
+    // Làm sạch các ký hiệu đặc biệt, giữ lại nội dung cần đọc
     const cleanText = text
-      .replace(/[#*`_~\[\]()\-]/g, ' ')
+      .replace(/[#*`_~\[\]\-]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = lang;
-    utterance.rate = 0.95;
-    utterance.pitch = 1.0;
+    const shortLang = lang.split('-')[0].toLowerCase(); // 'ko', 'en', 'vi'
 
-    const matchedVoice = this.findBestVoice(lang);
-    if (matchedVoice) {
-      utterance.voice = matchedVoice;
+    // Thử phát bằng Cloud Audio trước (hoạt động tốt nhất trên iOS Safari)
+    this.speakCloudAudio({
+      text: cleanText,
+      langCode: shortLang,
+      onStart,
+      onEnd,
+      onErrorFallback: () => {
+        // Fallback sang Web Speech API nếu cloud audio gặp lỗi hoặc offline
+        this.speakWebSpeech({ text: cleanText, lang, onStart, onEnd, onError });
+      }
+    });
+  }
+
+  speakCloudAudio({ text, langCode, onStart, onEnd, onErrorFallback }) {
+    if (!this.audioElement) {
+      this.initAudioPlayer();
     }
 
-    utterance.onstart = () => {
-      if (onStart) onStart();
+    const chunks = this.splitIntoChunks(text, 180);
+    let chunkIndex = 0;
+
+    const playNext = () => {
+      if (chunkIndex >= chunks.length) {
+        this.currentAudio = null;
+        if (onEnd) onEnd();
+        return;
+      }
+
+      const chunk = chunks[chunkIndex++];
+      const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${langCode}&client=tw-ob&q=${encodeURIComponent(chunk)}`;
+
+      const audio = this.audioElement || new Audio();
+      this.currentAudio = audio;
+      audio.src = url;
+
+      audio.onended = () => {
+        playNext();
+      };
+
+      audio.onerror = (e) => {
+        console.warn("Lỗi Cloud TTS audio, chuyển sang Web Speech API:", e);
+        if (onErrorFallback) onErrorFallback();
+      };
+
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          if (chunkIndex === 1 && onStart) {
+            onStart();
+          }
+        }).catch(err => {
+          console.warn("Trình duyệt chặn tự động phát audio:", err);
+          if (onErrorFallback) onErrorFallback();
+        });
+      }
     };
 
-    utterance.onend = () => {
-      if (onEnd) onEnd();
-    };
+    playNext();
+  }
 
-    utterance.onerror = (e) => {
-      console.error("Lỗi phát âm:", e);
-      if (onError) onError("Lỗi khi phát âm thanh.");
-    };
+  splitIntoChunks(text, maxLen = 180) {
+    if (text.length <= maxLen) return [text];
+    const sentences = text.match(/[^.!?;\n]+[.!?;\n]*/g) || [text];
+    const chunks = [];
+    let current = '';
+
+    for (const sentence of sentences) {
+      if ((current + ' ' + sentence).trim().length <= maxLen) {
+        current = (current + ' ' + sentence).trim();
+      } else {
+        if (current) chunks.push(current);
+        if (sentence.length <= maxLen) {
+          current = sentence.trim();
+        } else {
+          const words = sentence.split(' ');
+          let wordChunk = '';
+          for (const word of words) {
+            if ((wordChunk + ' ' + word).trim().length <= maxLen) {
+              wordChunk = (wordChunk + ' ' + word).trim();
+            } else {
+              if (wordChunk) chunks.push(wordChunk);
+              wordChunk = word;
+            }
+          }
+          if (wordChunk) current = wordChunk;
+        }
+      }
+    }
+    if (current) chunks.push(current);
+    return chunks;
+  }
+
+  speakWebSpeech({ text, lang = "vi-VN", onStart, onEnd, onError }) {
+    if (!this.synth) {
+      if (onError) onError("Trình duyệt không hỗ trợ phát âm thanh.");
+      return;
+    }
 
     try {
+      this.synth.cancel();
+
+      // Mở khóa AudioContext cho Safari iOS nếu bị suspended
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        if (!this.audioCtx) this.audioCtx = new AudioCtx();
+        if (this.audioCtx.state === 'suspended') {
+          this.audioCtx.resume();
+        }
+      }
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      // Giữ tham chiếu để tránh bị Safari Garbage Collector xóa giữa chừng
+      this.currentUtterance = utterance;
+
+      utterance.lang = lang;
+      utterance.rate = 0.95;
+      utterance.pitch = 1.0;
+
+      // Không ép chọn voice trên iOS để iOS tự chọn voice mặc định khả dụng
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (!isIOS) {
+        const matchedVoice = this.findBestVoice(lang);
+        if (matchedVoice) {
+          utterance.voice = matchedVoice;
+        }
+      }
+
+      utterance.onstart = () => {
+        if (onStart) onStart();
+      };
+
+      utterance.onend = () => {
+        this.currentUtterance = null;
+        if (onEnd) onEnd();
+      };
+
+      utterance.onerror = (e) => {
+        this.currentUtterance = null;
+        console.error("Lỗi Web Speech Synthesis:", e);
+        if (onError) onError("Không thể phát âm thanh.");
+      };
+
       this.synth.speak(utterance);
     } catch (e) {
-      console.error("Synth speak exception:", e);
+      this.currentUtterance = null;
+      console.error("Lỗi speakWebSpeech:", e);
       if (onError) onError("Không thể khởi động bộ phát âm.");
     }
   }
@@ -210,12 +349,31 @@ window.SpeechManager = class SpeechManager {
   }
 
   stopSpeaking() {
-    if (this.synth) {
-      this.synth.cancel();
+    if (this.currentAudio) {
+      try {
+        this.currentAudio.pause();
+        this.currentAudio.currentTime = 0;
+      } catch (e) {}
+      this.currentAudio = null;
     }
+    if (this.audioElement) {
+      try {
+        this.audioElement.pause();
+        this.audioElement.currentTime = 0;
+      } catch (e) {}
+    }
+    if (this.synth) {
+      try {
+        this.synth.cancel();
+      } catch (e) {}
+    }
+    this.currentUtterance = null;
   }
 
   isSpeaking() {
-    return this.synth ? this.synth.speaking : false;
+    const isAudioPlaying = this.currentAudio && !this.currentAudio.paused && !this.currentAudio.ended;
+    const isElemPlaying = this.audioElement && !this.audioElement.paused && !this.audioElement.ended && this.audioElement.currentTime > 0;
+    const isSynthSpeaking = this.synth && this.synth.speaking;
+    return !!(isAudioPlaying || isElemPlaying || isSynthSpeaking);
   }
 };

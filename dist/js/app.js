@@ -113,13 +113,33 @@ class TechTransApp {
       }
     });
 
-    // 3. Clear & Paste Buttons
-    this.btnClear.addEventListener('click', () => {
-      this.sourceText.value = '';
-      this.updateCharCount();
-      this.autoResizeTextarea();
-      this.sourceText.focus();
+    // Theo dõi trạng thái con trỏ và vùng chọn trong textarea
+    this.isSourceFocused = false;
+    ['focus', 'click', 'touchstart', 'pointerdown'].forEach(evt => {
+      this.sourceText.addEventListener(evt, () => {
+        this.isSourceFocused = true;
+      });
     });
+
+    // Ngăn chặn nút Xóa làm mất focus của ô văn bản khi người dùng click
+    const preventLossOfFocus = (e) => {
+      e.preventDefault();
+    };
+    ['pointerdown', 'mousedown', 'touchstart'].forEach(evt => {
+      this.btnClear.addEventListener(evt, preventLossOfFocus);
+    });
+
+    // Khi người dùng bấm ra ngoài (không phải ô văn bản và không phải nút Xóa)
+    ['pointerdown', 'touchstart', 'mousedown'].forEach(evt => {
+      document.addEventListener(evt, (e) => {
+        if (e.target !== this.sourceText && !this.btnClear.contains(e.target)) {
+          this.isSourceFocused = false;
+        }
+      });
+    });
+
+    // 3. Clear Button (Xóa thông minh: xóa đoạn theo con trỏ hoặc xóa toàn bộ)
+    this.btnClear.addEventListener('click', () => this.handleSmartClear());
 
     this.btnPaste.addEventListener('click', async () => {
       try {
@@ -526,13 +546,86 @@ class TechTransApp {
   }
 
   // ==========================================
+  // SMART CLEAR (XÓA THÔNG MINH)
+  // ==========================================
+  handleSmartClear() {
+    const val = this.sourceText.value;
+    if (!val || !val.trim()) {
+      this.sourceText.value = '';
+      this.updateCharCount();
+      this.autoResizeTextarea();
+      return;
+    }
+
+    // 1. NẾU NGƯỜI DÙNG KHÔNG CLICK VÀO Ô VĂN BẢN (isSourceFocused === false)
+    // -> XÓA TOÀN BỘ VĂN BẢN
+    if (!this.isSourceFocused) {
+      this.sourceText.value = '';
+      this.updateCharCount();
+      this.autoResizeTextarea();
+      this.showToast("Đã xóa toàn bộ văn bản!", "info");
+      return;
+    }
+
+    // 2. NẾU NGƯỜI DÙNG ĐÃ CLICK VÀO Ô VĂN BẢN:
+    const start = this.sourceText.selectionStart;
+    const end = this.sourceText.selectionEnd;
+
+    // Trường hợp A: Người dùng đang bôi đen một đoạn cụ thể
+    if (start !== end) {
+      const before = val.substring(0, start);
+      const after = val.substring(end);
+      this.sourceText.value = before + after;
+      this.sourceText.selectionStart = this.sourceText.selectionEnd = start;
+      this.sourceText.focus();
+      this.updateCharCount();
+      this.autoResizeTextarea();
+      this.showToast("Đã xóa đoạn văn bản được chọn!", "info");
+      return;
+    }
+
+    // Trường hợp B: Con trỏ chuột đang đứng tại một vị trí trong dòng/đoạn
+    const prevNewline = val.lastIndexOf('\n', start - 1);
+    const nextNewline = val.indexOf('\n', start);
+
+    let cutStart, cutEnd;
+    if (prevNewline === -1 && nextNewline === -1) {
+      // Toàn bộ văn bản chỉ có 1 dòng/đoạn
+      cutStart = 0;
+      cutEnd = val.length;
+    } else if (prevNewline === -1) {
+      // Đoạn đầu tiên trong văn bản
+      cutStart = 0;
+      cutEnd = nextNewline + 1; // xóa luôn ký tự \n phía sau
+    } else if (nextNewline === -1) {
+      // Đoạn cuối cùng trong văn bản
+      cutStart = prevNewline; // xóa luôn ký tự \n đứng trước
+      cutEnd = val.length;
+    } else {
+      // Đoạn nằm ở giữa các đoạn khác
+      cutStart = prevNewline + 1;
+      cutEnd = nextNewline + 1; // xóa đoạn và ký tự \n phía sau
+    }
+
+    const removedText = val.substring(cutStart, cutEnd).trim();
+    this.sourceText.value = val.substring(0, cutStart) + val.substring(cutEnd);
+    const newPos = Math.min(cutStart, this.sourceText.value.length);
+    this.sourceText.selectionStart = this.sourceText.selectionEnd = newPos;
+    this.sourceText.focus();
+    this.updateCharCount();
+    this.autoResizeTextarea();
+
+    const shortPreview = removedText.length > 25 ? removedText.substring(0, 25) + '...' : removedText;
+    this.showToast(shortPreview ? `Đã xóa đoạn: "${shortPreview}"` : "Đã xóa dòng này!", "info");
+  }
+
+  // ==========================================
   // TEXT TO SPEECH (TTS)
   // ==========================================
   toggleSingleTTS() {
     if (this.speech.isSpeaking()) {
       this.speech.stopSpeaking();
-      this.btnSpeak.classList.remove('speaking');
-      this.speakText.textContent = "Nghe đọc";
+      this.resetAllSpeakButtons();
     } else {
       const text = this.currentSingleResult;
       const langMap = {
@@ -541,7 +634,6 @@ class TechTransApp {
         vi: 'vi-VN'
       };
       const lang = langMap[this.currentSingleLang] || 'vi-VN';
-
       this.speakText(text, lang, this.btnSpeak);
     }
   }
@@ -549,28 +641,51 @@ class TechTransApp {
   speakText(text, lang, targetButton) {
     if (this.speech.isSpeaking()) {
       this.speech.stopSpeaking();
-      if (targetButton) targetButton.classList.remove('speaking');
+      this.resetAllSpeakButtons();
       return;
     }
 
     if (!text) return;
 
+    this.resetAllSpeakButtons();
     if (targetButton) targetButton.classList.add('speaking');
+    if (targetButton === this.btnSpeak && this.speakText) {
+      this.speakText.textContent = "Dừng đọc";
+    }
+
+    // Nhắc nhở người dùng iPhone nếu vô tình bật nút gạt Im lặng (Silent switch)
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (isIOS && !this.hasShownSilentSwitchTip) {
+      this.hasShownSilentSwitchTip = true;
+      this.showToast("💡 Nếu không nghe thấy tiếng, hãy đảm bảo nút gạt Im lặng (bên sườn iPhone) đang tắt!", "info", 5000);
+    }
 
     this.speech.speak({
       text,
       lang,
       onStart: () => {
         if (targetButton) targetButton.classList.add('speaking');
+        if (targetButton === this.btnSpeak && this.speakText) {
+          this.speakText.textContent = "Dừng đọc";
+        }
       },
       onEnd: () => {
-        if (targetButton) targetButton.classList.remove('speaking');
+        this.resetAllSpeakButtons();
       },
       onError: (msg) => {
-        if (targetButton) targetButton.classList.remove('speaking');
+        this.resetAllSpeakButtons();
         this.showToast(msg, "error");
       }
     });
+  }
+
+  resetAllSpeakButtons() {
+    if (this.btnSpeak) {
+      this.btnSpeak.classList.remove('speaking');
+      if (this.speakText) this.speakText.textContent = "Nghe đọc";
+    }
+    if (this.btnSpeakKo) this.btnSpeakKo.classList.remove('speaking');
+    if (this.btnSpeakEn) this.btnSpeakEn.classList.remove('speaking');
   }
 
   // ==========================================
