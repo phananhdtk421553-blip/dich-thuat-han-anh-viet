@@ -115,23 +115,27 @@ class TechTransApp {
 
     // Theo dõi trạng thái con trỏ và vùng chọn trong textarea
     this.isSourceFocused = false;
-    this.sourceText.addEventListener('focus', () => {
-      this.isSourceFocused = true;
+    ['focus', 'click', 'touchstart', 'pointerdown'].forEach(evt => {
+      this.sourceText.addEventListener(evt, () => {
+        this.isSourceFocused = true;
+      });
     });
 
     // Ngăn chặn nút Xóa làm mất focus của ô văn bản khi người dùng click
     const preventLossOfFocus = (e) => {
       e.preventDefault();
     };
-    this.btnClear.addEventListener('pointerdown', preventLossOfFocus);
-    this.btnClear.addEventListener('mousedown', preventLossOfFocus);
-    this.btnClear.addEventListener('touchstart', preventLossOfFocus);
+    ['pointerdown', 'mousedown', 'touchstart'].forEach(evt => {
+      this.btnClear.addEventListener(evt, preventLossOfFocus);
+    });
 
     // Khi người dùng bấm ra ngoài (không phải ô văn bản và không phải nút Xóa)
-    document.addEventListener('pointerdown', (e) => {
-      if (e.target !== this.sourceText && !this.btnClear.contains(e.target)) {
-        this.isSourceFocused = false;
-      }
+    ['pointerdown', 'touchstart', 'mousedown'].forEach(evt => {
+      document.addEventListener(evt, (e) => {
+        if (e.target !== this.sourceText && !this.btnClear.contains(e.target)) {
+          this.isSourceFocused = false;
+        }
+      });
     });
 
     // 3. Clear Button (Xóa thông minh: xóa đoạn theo con trỏ hoặc xóa toàn bộ)
