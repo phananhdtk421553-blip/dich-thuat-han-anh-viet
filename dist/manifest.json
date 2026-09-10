@@ -2,7 +2,7 @@
   "name": "TechTrans K-E-V | Dịch Thuật Kỹ Thuật Hàn - Anh - Việt",
   "short_name": "TechTrans",
   "description": "Ứng dụng dịch thuật kỹ thuật công nghiệp chuyên dụng cho sản xuất pin, cơ khí và điện tử",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#0b0f19",

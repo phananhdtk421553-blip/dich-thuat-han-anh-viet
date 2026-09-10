@@ -741,6 +741,9 @@ class TechTransApp {
         navigator.serviceWorker.register('./sw.js')
           .then(reg => {
             console.log('Service Worker đã đăng ký thành công:', reg.scope);
+            if (reg.update) {
+              reg.update();
+            }
           })
           .catch(err => {
             console.warn('Lỗi đăng ký Service Worker:', err);

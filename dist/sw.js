@@ -1,11 +1,11 @@
 // ==========================================================================
 // SW.JS - SERVICE WORKER HỖ TRỢ PWA VÀ CACHE OFFLINE CHO TECHTRANS
+// (Tối ưu hóa đặc biệt cho Safari iOS - Chống lỗi Redirection)
 // ==========================================================================
 
-const CACHE_NAME = 'techtrans-kev-v2';
+const CACHE_NAME = 'techtrans-kev-v3';
 const ASSETS_TO_CACHE = [
   './',
-  './index.html',
   './manifest.json',
   './css/style.css',
   './js/config.js',
@@ -18,17 +18,33 @@ const ASSETS_TO_CACHE = [
   './assets/icons/icon-512.png'
 ];
 
-// 1. Install Event: Caching static assets
+// Safari WebKit ném lỗi "Response served by service worker has redirections"
+// nếu Response trả về cho event.respondWith() có thuộc tính redirected: true.
+// Hàm này loại bỏ cờ redirect bằng cách khởi tạo một Response sạch mới.
+function sanitizeResponse(response) {
+  if (!response || !response.redirected) {
+    return response;
+  }
+  const body = [101, 204, 205, 304].includes(response.status) ? null : response.body;
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers
+  });
+}
+
+// 1. Install Event: Caching static assets & skipWaiting ngay
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       console.log('[SW] Pre-caching static assets...');
       return cache.addAll(ASSETS_TO_CACHE);
-    }).then(() => self.skipWaiting())
+    })
   );
 });
 
-// 2. Activate Event: Cleanup old caches
+// 2. Activate Event: Dọn sạch cache cũ & chiếm quyền kiểm soát ngay lập tức
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keyList) => {
@@ -44,39 +60,67 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// 3. Fetch Event: Cache First for static files, Network Only for Gemini API
+// 3. Fetch Event
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Không cache các request gửi lên Google Gemini API
+  // Không can thiệp các request gửi lên Google Gemini API
   if (url.hostname.includes('googleapis.com') || url.hostname.includes('google.com')) {
     return;
   }
 
+  // A. Xử lý navigation / mở app PWA từ màn hình chính (start_url: index.html hoặc ./)
+  if (event.request.mode === 'navigate' || url.pathname.endsWith('/index.html') || url.pathname === '/') {
+    event.respondWith(
+      (async () => {
+        try {
+          // Thử mạng trước để luôn cập nhật phiên bản mới
+          const networkResponse = await fetch(event.request);
+          if (networkResponse && networkResponse.status === 200) {
+            const cacheCopy = networkResponse.clone();
+            const cache = await caches.open(CACHE_NAME);
+            cache.put('./', cacheCopy);
+          }
+          return sanitizeResponse(networkResponse);
+        } catch (err) {
+          // Khi offline hoặc mất mạng, lấy từ cache
+          const cachedResponse = (await caches.match('./')) || (await caches.match('/'));
+          if (cachedResponse) {
+            return sanitizeResponse(cachedResponse);
+          }
+          throw err;
+        }
+      })()
+    );
+    return;
+  }
+
+  // B. Xử lý các tài nguyên tĩnh khác (CSS, JS, Icons, Images)
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
+    (async () => {
+      const cachedResponse = await caches.match(event.request);
       if (cachedResponse) {
-        return cachedResponse;
+        return sanitizeResponse(cachedResponse);
       }
-      return fetch(event.request).then((networkResponse) => {
-        // Nếu file hợp lệ, lưu vào cache động
+      try {
+        const networkResponse = await fetch(event.request);
         if (
           networkResponse &&
           networkResponse.status === 200 &&
           event.request.method === 'GET'
         ) {
           const responseToCache = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
+          const cache = await caches.open(CACHE_NAME);
+          cache.put(event.request, responseToCache);
         }
-        return networkResponse;
-      }).catch(() => {
-        // Fallback offline nếu không có mạng
+        return sanitizeResponse(networkResponse);
+      } catch (err) {
         if (event.request.mode === 'navigate') {
-          return caches.match('./index.html');
+          const fallback = (await caches.match('./')) || (await caches.match('/'));
+          if (fallback) return sanitizeResponse(fallback);
         }
-      });
-    })
+        throw err;
+      }
+    })()
   );
 });
